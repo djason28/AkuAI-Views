@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<script>
+			// Apply theme immediately to prevent flash
+			(function() {
+				const savedTheme = localStorage.getItem('theme') || 'dark';
+				document.documentElement.setAttribute('data-theme', savedTheme);
+				document.documentElement.style.colorScheme = savedTheme;
+			})();
+		</script>
+		<meta name="theme-color" content="#0f172a" />
+		<style>
+			/* Critical loading styles to prevent flash */
+			html, body {
+				margin: 0 !important;
+				padding: 0 !important;
+				min-height: 100vh !important;
+				background: var(--background-color) !important;
+				color: var(--text-primary) !important;
+				transition: none !important;
+			}
+			
+			/* Ensure consistent background during load */
+			#svelte, [data-sveltekit-preload-data], main {
+				background: transparent !important;
+				min-height: inherit;
+			}
+		</style>
+		<link rel="stylesheet" href="/src/lib/styles/global.css" />
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>
