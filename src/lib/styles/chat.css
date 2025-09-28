@@ -20,7 +20,7 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 20px 10px 112px 10px; /* extra bottom space so last line isn't clipped by sticky footer */
+  padding: 20px 10px var(--footer-offset, 112px) 10px; /* extra bottom space so last line isn't clipped by sticky footer */
   margin: 0 0 12px 0; /* Reduced margin */
   border-radius: 12px;
   background: linear-gradient(180deg, rgba(10,12,18,0.65) 0%, rgba(8,10,15,0.85) 100%);
@@ -140,7 +140,7 @@
   max-width: 90%; /* User messages 90% width */
   box-shadow: var(--shadow-lg);
   border: 1px solid var(--border-secondary);
-  margin: 8px 20px 8px auto; /* Centered with margin */
+  margin: 8px 20px; /* Equal margins on both sides */
 }
 
 .message.bot {
@@ -149,10 +149,10 @@
   border: 1px solid var(--border-primary);
   color: var(--text-primary);
   border-radius: 16px 16px 16px 4px;
-  width: calc(100% - 0px); /* Full width within the padded container */
-  max-width: calc(100% - 0px);
+  width: calc(100% - 40px); /* Account for 20px margins on both sides */
+  max-width: calc(100% - 40px);
   box-shadow: var(--shadow-md);
-  margin: 8px 0; /* No side margins for full width */
+  margin: 8px 20px; /* Equal 20px margins on both sides */
   word-wrap: break-word;
   overflow-wrap: break-word;
   word-break: break-word;
@@ -188,6 +188,45 @@
   font-weight: 500;
   padding: 40px 20px;
 }
+
+/* Rich empty state */
+.empty.empty-rich { padding: 48px 24px; }
+.empty-title {
+  font-size: 24px; /* increased ~+6px from 18px */
+  font-weight: 700;
+  margin-top: 15px; /* push down ~15px */
+  margin-bottom: 16px;
+  color: rgba(241,245,249,0.9);
+}
+.empty-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+.empty-quick-btn {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.9);
+  border: 1px solid rgba(255,255,255,0.1);
+  cursor: pointer;
+  transition: all .2s ease;
+  text-align: center;
+}
+.empty-quick-btn:hover {
+  background: rgba(255,255,255,0.12);
+  transform: translateY(-1px);
+}
+
+[data-theme="light"] .empty-title { color: #1f2937; }
+[data-theme="light"] .empty-quick-btn {
+  background: rgba(0,0,0,0.04);
+  color: #1f2937;
+  border-color: rgba(0,0,0,0.08);
+}
+[data-theme="light"] .empty-quick-btn:hover { background: rgba(0,0,0,0.06); }
 
 [data-theme="light"] .empty {
   color: #2a2a2a;

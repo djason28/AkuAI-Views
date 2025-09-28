@@ -40,6 +40,13 @@
 	overflow: hidden;
 }
 
+/* When modal is shown, subtly blur and dim the app content */
+.app.blurred {
+    filter: blur(2px) brightness(0.9);
+    transition: filter 0.2s ease;
+    pointer-events: none; /* prevent clicks behind modal */
+}
+
 /* Floating particles background effects */
 .app::before {
 	content: "";

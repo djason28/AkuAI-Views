@@ -171,7 +171,8 @@ body {
 #svelte, 
 [data-sveltekit-preload-data],
 main,
-div:not([class*="login-"]):not([class*="register-"]):not([class*="toggle-"]):not([class*="btn"]):not([class*="message"]) {
+/* Do NOT force transparent background on modal elements */
+div:not([class*="login-"]):not([class*="register-"]):not([class*="toggle-"]):not([class*="btn"]):not([class*="message"]):not([class*="modal"]) {
   background: transparent !important;
   min-height: inherit;
 }

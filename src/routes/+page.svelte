@@ -31,7 +31,7 @@
   let isSearching = false;
   let isSidebarCollapsed = false;
 
-  // Profile editing variables
+  // Profile modal variables
   let showProfileModal = false;
   let profileEmail = "";
   let profileUsername = "";
@@ -39,9 +39,42 @@
   let profileError = "";
   let profileSuccess = "";
   let isUpdatingProfile = false;
+
   let inputMessageElement;
   let isStreaming = false;
   let streamAbortController = null;
+  let stopRequested = false;            // hard-stop current stream (pacing + network)
+  let nextSendBypassDuplicate = false;  // one-shot duplicate bypass after user stopped
+  // Sequence IDs to prevent stale/aborted run from surfacing errors
+  let runSeq = 0;
+  let lastStoppedRunSeq = -1;
+
+  function stopStreaming() {
+    if (streamAbortController) {
+      try { streamAbortController.abort(); } catch (_) {}
+      streamAbortController = null;
+    }
+    stopRequested = true;
+    // Mark that the current run sequence was explicitly stopped
+    lastStoppedRunSeq = runSeq;
+    isStreaming = false;
+    showLoadingDots = false;
+
+    // Immediately finalize any currently streaming bot bubble with what we have
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m && m.sender === 'bot' && m.isStreaming) {
+        const updated = [...messages];
+        const finalText = m.text || "";
+        updated[i] = { ...m, isStreaming: false, _preFormattedHTML: formatBotMessage(finalText), _formatted: true };
+        messages = updated;
+        break;
+      }
+    }
+
+    // Allow next identical question to bypass duplicate guard (server-side)
+    nextSendBypassDuplicate = true;
+  }
   
   // Session completion tracking
   let sessionCompleted = false;
@@ -58,7 +91,8 @@
     "Berikan informasi jurusan IT yang prospektif", 
     "Bagaimana cara memilih universitas yang tepat?",
     "Apa saja persyaratan masuk universitas negeri?",
-    "Ceritakan tentang biaya kuliah di berbagai universitas"
+    "Ceritakan tentang biaya kuliah di berbagai universitas",
+    "Rekomendasikan beasiswa terbaru dan syaratnya"
   ];
 
   // Use backend search API instead of client-side filtering
@@ -140,32 +174,63 @@
     }
   }
 
-  function handleKeyPress(event) {
-    if (event.key === 'Enter') {
-      if (event.shiftKey) {
-        // Shift+Enter: allow new line (default textarea behavior)
-        // Auto-resize textarea
-        setTimeout(() => {
-          if (inputMessageElement) {
-            inputMessageElement.style.height = 'auto';
-            inputMessageElement.style.height = inputMessageElement.scrollHeight + 'px';
-          }
-        }, 0);
-        return;
-      } else {
-        // Enter without Shift: send message
+  // IME composition guard so Enter while composing (e.g., Japanese) doesn't send
+  let isComposing = false;
+
+  function handleTextareaKeydown(event) {
+    if (event.key !== 'Enter') return;
+
+    // Shift+Enter → baris baru (newline) dengan batas 5 baris
+    if (event.shiftKey) {
+      const currentLines = (inputMessage.match(/\n/g) || []).length + 1;
+      const maxLines = 5;
+      if (currentLines >= maxLines) {
         event.preventDefault();
+      }
+      // Resize dan offset setelah newline
+      setTimeout(() => {
+        autoResizeTextarea();
+        if (inputMessageElement) {
+          inputMessageElement.scrollTop = inputMessageElement.scrollHeight;
+        }
+        updateFooterOffset();
+      }, 0);
+      return;
+    }
+
+    // Enter tunggal → kirim pesan (atau stop jika sedang streaming)
+    if (!isComposing) {
+      event.preventDefault();
+      if (isStreaming) {
+        // optional convenience: Enter juga menghentikan streaming
+        stopStreaming();
+      } else {
         sendMessage();
       }
     }
   }
 
-  // Function to auto-resize textarea
+  // Function to auto-resize textarea (cap at 5 lines)
   function autoResizeTextarea() {
-    if (inputMessageElement) {
-      inputMessageElement.style.height = 'auto';
-      inputMessageElement.style.height = inputMessageElement.scrollHeight + 'px';
-    }
+    if (!inputMessageElement) return;
+    const style = getComputedStyle(inputMessageElement);
+    const lineHeight = parseFloat(style.lineHeight || '20');
+    const paddingY = parseFloat(style.paddingTop || '0') + parseFloat(style.paddingBottom || '0');
+    const maxLines = 5;
+    const maxHeight = lineHeight * maxLines + paddingY;
+    inputMessageElement.style.height = 'auto';
+    const target = Math.min(inputMessageElement.scrollHeight, maxHeight);
+    inputMessageElement.style.height = target + 'px';
+  }
+
+  // Measure footer height and set chat padding offset
+  let chatInputElement;
+  function updateFooterOffset() {
+    try {
+      const h = chatInputElement?.getBoundingClientRect().height || 112;
+      // Tambah ruang 20px agar tidak mepet
+      document.documentElement.style.setProperty('--footer-offset', (h + 20) + 'px');
+    } catch (_) {}
   }
 
   // Quick chat functions
@@ -259,8 +324,10 @@
       conversation_id: currentConversation || null
     };
 
-    isStreaming = true;
-    showLoadingDots = true;
+  isStreaming = true;
+  stopRequested = false;
+  const myRunSeq = ++runSeq; // tag this send operation
+  showLoadingDots = true;
     showDoneIndicator = false; // Hide done indicator when starting new message
     if (autoReloadTimer) {
       clearTimeout(autoReloadTimer);
@@ -291,6 +358,10 @@
   const delay = firstEmit ? 140 + Math.floor(Math.random() * 120) : 35;
       paceTimer = setTimeout(() => {
         paceTimer = null;
+        if (stopRequested) {
+          pendingText = "";
+          paceDone = true;
+        }
         if (pendingText.length === 0) {
           // Nothing to show; if server finished, stop.
           if (paceDone) {
@@ -353,9 +424,17 @@
           // Streaming is completely done, mark message as not streaming and clean up
           if (botIndex >= 0 && messages[botIndex]) {
             const updated = [...messages];
-            updated[botIndex] = { ...updated[botIndex], isStreaming: false };
+            const finalText = (updated[botIndex].text || "");
+            updated[botIndex] = { 
+              ...updated[botIndex], 
+              isStreaming: false,
+              _preFormattedHTML: formatBotMessage(finalText),
+              _formatted: true
+            };
             messages = updated;
           }
+          // Allow UI controls to revert to Send
+          isStreaming = false;
           // Hide done indicator after a brief delay
           setTimeout(() => {
             showDoneIndicator = false;
@@ -372,17 +451,20 @@
       }
     }, 60000); // 60 second timeout
 
+    let completedNormally = false; // visible to catch/finally of this run
     try {
       const res = await fetch(`${API_URL}/conversations/stream`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Accept": "text/event-stream",
-          Authorization: `Bearer ${token}`
+          Authorization: `Bearer ${token}`,
+          ...(nextSendBypassDuplicate ? { "X-Bypass-Duplicate": "1" } : {})
         },
         body: JSON.stringify(payload),
         signal: streamAbortController.signal
       });
+      nextSendBypassDuplicate = false;
 
       if (!res.ok || !res.body) {
         clearTimeout(streamTimeout);
@@ -393,7 +475,6 @@
       let chunkCount = 0;
       let lastChunkTime = Date.now();
   let shouldClose = false; // set true to break the outer read loop after handling 'done'
-  let completedNormally = false; // marks that we reached 'done' from server
       
       while (true) {
         const { done, value } = await reader.read();
@@ -464,35 +545,45 @@
         }
       }
     } catch (err) {
-      console.error("Stream error:", err);
-      showLoadingDots = false;
+      // Suppress console noise for manual stops; log others
+      const wasManuallyStopped = lastStoppedRunSeq === myRunSeq;
+      const isAbortError = err && err.name === 'AbortError';
+      if (!wasManuallyStopped || !isAbortError) {
+        console.error("Stream error:", err);
+      }
+      
+      // Only affect UI state if this is still the latest run
+      if (myRunSeq === runSeq) { showLoadingDots = false; }
       clearTimeout(streamTimeout);
       
       let errorMessage = "";
-      if (err.name === 'AbortError') {
+      if (err && err.name === 'AbortError') {
         if (completedNormally) {
           // Ignore aborts triggered by our own completion cleanup
           console.log("🟡 Stream cancelled normally after completion");
         } else {
           errorMessage = "Stream dibatalkan atau timeout.";
         }
-      } else if (err.message.includes('HTTP')) {
+      } else if (err && err.message && err.message.includes('HTTP')) {
         errorMessage = `Server error: ${err.message}`;
       } else {
         errorMessage = "Maaf, terjadi kesalahan saat streaming.";
       }
       
-      if (errorMessage) {
+      const isStale = myRunSeq !== runSeq; // a newer send started
+      if (errorMessage && !wasManuallyStopped && !isStale) {
         messages = [...messages, { sender: "bot", text: errorMessage, _k: Date.now() }];
       }
     } finally {
       // Do not prematurely stop pacing; let scheduleNextTick drain the buffer
-      showLoadingDots = false;
-      streamAbortController = null;
+      if (myRunSeq === runSeq) {
+        showLoadingDots = false;
+        streamAbortController = null;
+      }
       clearTimeout(streamTimeout);
       console.log("Stream cleanup completed, total schedules:", scheduleCount);
       // If there's still buffered text, ensure a pacing tick is scheduled
-      if (pendingText.length > 0 && !paceTimer) {
+      if (!stopRequested && pendingText.length > 0 && !paceTimer) {
         scheduleNextTick();
       }
       // After drained (handled inside scheduleNextTick), mark message complete and pre-format once
@@ -500,6 +591,8 @@
       if (autoReloadTimer) { clearTimeout(autoReloadTimer); autoReloadTimer = null; }
       // Keep conversations list fresh
       loadConversations(searchQuery);
+      // Ensure send button returns after completion/abort
+      if (myRunSeq === runSeq) { isStreaming = false; }
     }
   }
 
@@ -557,9 +650,43 @@ async function deleteConversation(conversationId) {
     }
   }
 
-  // Profile editing functions
+  // Profile modal functions
+  let modalElement;
+  let previouslyFocused;
+
+  // Focus trap for modal
+  function trapFocus(event) {
+    if (!modalElement) return;
+    
+    const focusableElements = modalElement.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    
+    const firstFocusable = focusableElements[0];
+    const lastFocusable = focusableElements[focusableElements.length - 1];
+
+    if (event.key === 'Tab') {
+      if (event.shiftKey) {
+        if (document.activeElement === firstFocusable) {
+          event.preventDefault();
+          lastFocusable.focus();
+        }
+      } else {
+        if (document.activeElement === lastFocusable) {
+          event.preventDefault();
+          firstFocusable.focus();
+        }
+      }
+    }
+  }
+
   async function openProfileModal() {
-    showProfileModal = true;
+    // Store currently focused element
+    previouslyFocused = document.activeElement;
+    
+  showProfileModal = true;
+  // Lock background scroll
+  try { document.documentElement.style.overflow = 'hidden'; } catch (_) {}
     profileError = "";
     profileSuccess = "";
     
@@ -574,11 +701,19 @@ async function deleteConversation(conversationId) {
         profileUsername = data.username;
         profilePassword = "";
       } else {
-        profileError = "Failed to load profile data";
+        profileError = "Gagal memuat data profil";
       }
     } catch (error) {
-      profileError = "Error loading profile data";
+      profileError = "Terjadi kesalahan saat memuat profil";
     }
+
+    // Focus first input after modal is rendered
+    setTimeout(() => {
+      const firstInput = modalElement?.querySelector('input');
+      if (firstInput) {
+        firstInput.focus();
+      }
+    }, 100);
   }
 
   function closeProfileModal() {
@@ -586,6 +721,14 @@ async function deleteConversation(conversationId) {
     profileError = "";
     profileSuccess = "";
     profilePassword = "";
+
+    // Restore background scroll
+    try { document.documentElement.style.overflow = ''; } catch (_) {}
+
+    // Restore focus to previously focused element
+    if (previouslyFocused) {
+      previouslyFocused.focus();
+    }
   }
 
   async function updateProfile() {
@@ -596,35 +739,21 @@ async function deleteConversation(conversationId) {
     
     // Basic validation
     if (!profileEmail.trim() || !profileUsername.trim()) {
-      profileError = "Email and username are required";
+      profileError = "Email dan username wajib diisi";
       return;
     }
 
-    // Email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(profileEmail.trim())) {
-      profileError = "Invalid email format";
-      return;
-    }
-
-    // Password validation if provided
-    if (profilePassword && profilePassword.length < 6) {
-      profileError = "Password must be at least 6 characters";
-      return;
+    const updateData = {
+      email: profileEmail.trim().toLowerCase(),
+      username: profileUsername.trim(),
+    };
+      
+    if (profilePassword) {
+      updateData.password = profilePassword;
     }
 
     isUpdatingProfile = true;
-
     try {
-      const updateData = {
-        email: profileEmail.trim().toLowerCase(),
-        username: profileUsername.trim(),
-      };
-      
-      if (profilePassword) {
-        updateData.password = profilePassword;
-      }
-
       const res = await fetch(`${API_URL}/profile`, {
         method: "PUT",
         headers: {
@@ -635,7 +764,7 @@ async function deleteConversation(conversationId) {
       });
 
       if (res.ok) {
-        profileSuccess = "Profile updated successfully";
+        profileSuccess = "Profil berhasil diperbarui";
         username = profileUsername.trim(); // Update displayed username
         localStorage.setItem("username", username);
         profilePassword = "";
@@ -644,12 +773,37 @@ async function deleteConversation(conversationId) {
         }, 1500);
       } else {
         const err = await res.json();
-        profileError = err.msg || "Failed to update profile";
+        profileError = err.msg || "Gagal memperbarui profil";
       }
     } catch (error) {
-      profileError = "Error updating profile";
+      profileError = "Terjadi kesalahan saat memperbarui profil";
     } finally {
       isUpdatingProfile = false;
+    }
+  }
+
+  // Delete all history (all conversations for current user)
+  async function deleteAllHistory() {
+    if (!token) return;
+    const confirmDelete = confirm("Hapus semua riwayat percakapan? Tindakan ini tidak bisa dibatalkan.");
+    if (!confirmDelete) return;
+    try {
+      const res = await fetch(`${API_URL}/conversations`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        conversations = [];
+        currentConversation = null;
+        messages = [];
+        profileSuccess = "Semua riwayat percakapan berhasil dihapus.";
+        setTimeout(() => { profileSuccess = ""; }, 2000);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        profileError = err.msg || "Gagal menghapus semua riwayat.";
+      }
+    } catch (e) {
+      profileError = "Terjadi kesalahan jaringan.";
     }
   }
 
@@ -680,6 +834,14 @@ async function deleteConversation(conversationId) {
     
     loadConversations();
     isInitialized = true; // Mark as initialized after first load
+    // Sync footer offset initially and on resize
+    setTimeout(updateFooterOffset, 0);
+    let ro;
+    try {
+      ro = new ResizeObserver(() => updateFooterOffset());
+      if (chatInputElement) ro.observe(chatInputElement);
+    } catch (_) {}
+    window.addEventListener('resize', updateFooterOffset);
     
     // Add keyboard shortcut listener
     document.addEventListener('keydown', handleKeydown);
@@ -693,8 +855,21 @@ async function deleteConversation(conversationId) {
       if (autoReloadTimer) {
         clearTimeout(autoReloadTimer);
       }
+      try { ro && ro.disconnect && ro.disconnect(); } catch (_) {}
+      window.removeEventListener('resize', updateFooterOffset);
     };
   });
+
+  // Simple portal action: moves an element to document.body while keeping Svelte reactivity
+  function portal(node) {
+    const target = document.body;
+    target.appendChild(node);
+    return {
+      destroy() {
+        if (node && node.parentNode === target) target.removeChild(node);
+      }
+    };
+  }
 
     // setiap messages berubah → scroll ke bawah
   afterUpdate(() => {
@@ -704,7 +879,7 @@ async function deleteConversation(conversationId) {
   });
 </script>
 
-<div class="app">
+<div class="app" class:blurred={showProfileModal}>
   <!-- Global Header -->
   <header class="app-header">
     <div class="header-left">
@@ -748,7 +923,7 @@ async function deleteConversation(conversationId) {
   <aside class="sidebar" class:collapsed={isSidebarCollapsed}>
     <div class="sidebar-header">
       <div class="profile-section">
-        <button class="profile-avatar-btn" on:click={openProfileModal} aria-label="Edit Profile">
+  <button class="profile-avatar-btn" on:click={openProfileModal} aria-label="Edit Profile">
           <div class="profile-avatar">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
               <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
@@ -853,7 +1028,16 @@ async function deleteConversation(conversationId) {
     <div class="chat-messages" bind:this={chatContainer}>
       {#key messagesRenderKey}
       {#if messages.length === 0}
-        <p class="empty">Belum ada pesan. Mulai percakapan baru!</p>
+        <div class="empty empty-rich">
+          <div class="empty-title">Apa yang bisa kami bantu?</div>
+          <div class="empty-grid">
+            {#each quickChatItems.slice(0,6) as item}
+              <button class="empty-quick-btn" on:click={() => selectQuickChatItem(item)}>
+                {item}
+              </button>
+            {/each}
+          </div>
+        </div>
       {:else}
         {#each messages as msg, i (msg._k ?? (i + '-' + (msg.isStreaming ? '1' : '0')))}
           <div class="message {msg.sender}" 
@@ -903,7 +1087,7 @@ async function deleteConversation(conversationId) {
     </div>
 
     <!-- Sticky input -->
-    <footer class="chat-input">
+  <footer class="chat-input" bind:this={chatInputElement}>
       <!-- Quick chat toggle button -->
       <button 
         class="quick-chat-toggle"
@@ -939,25 +1123,27 @@ async function deleteConversation(conversationId) {
       </button>
 
       <textarea
-        placeholder="Tulis pertanyaan... (Shift+Enter untuk baris baru)"
+        placeholder="Tulis pertanyaan..."
         bind:value={inputMessage}
         bind:this={inputMessageElement}
-        on:keydown={handleKeyPress}
-        on:input={autoResizeTextarea}
+        on:keydown={handleTextareaKeydown}
+        on:compositionstart={() => (isComposing = true)}
+        on:compositionend={() => (isComposing = false)}
+        on:input={() => { autoResizeTextarea(); updateFooterOffset(); }}
         rows="1"
       ></textarea>
       
       <button 
         class="send-btn" 
         class:loading={isStreaming}
-        on:click={sendMessage} 
-        disabled={isStreaming}
-        aria-label="Send message"
+        on:click={isStreaming ? stopStreaming : sendMessage}
+        aria-label={isStreaming ? "Hentikan" : "Kirim pesan"}
+        title={isStreaming ? "Hentikan" : "Kirim"}
       >
         {#if isStreaming}
-          <!-- Spinner icon for loading -->
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spinner">
-            <path d="M21 12a9 9 0 11-6.219-8.56"/>
+          <!-- Stop icon -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="6" y="6" width="12" height="12" rx="1" ry="1"></rect>
           </svg>
         {:else}
           <!-- Send icon -->
@@ -980,30 +1166,44 @@ async function deleteConversation(conversationId) {
 
 <!-- Profile Edit Modal -->
 {#if showProfileModal}
-  <div
-    class="modal-overlay"
+  <div 
+    class="modal-overlay" 
+    use:portal
+    style="position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important; z-index: 999999 !important; background: rgba(0,0,0,0.4) !important; backdrop-filter: blur(6px) !important; display: flex !important; align-items: center !important; justify-content: center !important; padding: 20px !important;"
     role="button"
     tabindex="0"
-    aria-label="Close profile modal"
+    aria-label="Close modal"
     on:click={closeProfileModal}
-    on:keydown={(e) => (e.key === "Escape" || e.key === "Enter" || e.key === " ") && closeProfileModal()}
+    on:keydown={(e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeProfileModal();
+      }
+    }}
   >
-    <div
-      class="profile-modal"
+    <div 
+      class="profile-modal" 
+      style="position: relative !important; width: 60vw !important; max-width: 1000px !important; background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%) !important; border: 2px solid rgba(148,163,184,0.25) !important; border-radius: 16px !important; box-shadow: 0 25px 50px rgba(0,0,0,0.25), 0 8px 32px rgba(0,0,0,0.12) !important; z-index: 1 !important;"
       role="dialog"
       aria-modal="true"
+      aria-labelledby="profile-modal-title"
+      tabindex="-1"
+      bind:this={modalElement}
       on:click|stopPropagation
-      tabindex="0"
-      on:keydown={(e) => (e.key === "Escape") && closeProfileModal()}
+      on:keydown|stopPropagation={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          closeProfileModal();
+        } else {
+          trapFocus(e);
+        }
+      }}
     >
-      <div class="modal-header">
-        <h2>Edit Profile</h2>
-        <button class="close-btn" on:click={closeProfileModal} aria-label="Close">
-          ×
-        </button>
+      <div class="modal-header" style="padding: 20px 32px 16px 32px; border-bottom: 2px solid rgba(148,163,184,0.2); background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%); border-radius: 16px 16px 0 0;">
+        <h2 id="profile-modal-title" style="margin: 0; font-size: 1.5rem; font-weight: 700; background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">My profile</h2>
       </div>
 
-      <div class="modal-content">
+      <div class="modal-content" style="padding: 24px 32px 28px 32px; background: rgba(5,15,30,0.6); border-radius: 0 0 16px 16px;">
         {#if profileError}
           <div class="error-message">{profileError}</div>
         {/if}
@@ -1011,45 +1211,104 @@ async function deleteConversation(conversationId) {
           <div class="success-message">{profileSuccess}</div>
         {/if}
 
+        <!-- Avatar removed per request -->
+
         <form on:submit|preventDefault={updateProfile}>
           <div class="form-group">
-            <label for="profile-email">Email</label>
-            <input
-              id="profile-email"
-              type="email"
-              bind:value={profileEmail}
-              placeholder="admin@gmail.com"
-              required
-            />
+            <label for="profile-name">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 8px;">
+                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+              </svg>
+              Name
+            </label>
+            <div class="input-wrapper">
+              <input
+                id="profile-name"
+                type="text"
+                name="name"
+                autocomplete="name"
+                bind:value={profileUsername}
+                placeholder="Enter your full name"
+                required
+                style="width: 100%; padding: 16px 20px; border: 2px solid rgba(148,163,184,0.15); border-radius: 14px; background: rgba(15,23,42,0.4); color: #f1f5f9; font-size: 1rem; font-weight: 500; transition: all 0.3s ease; backdrop-filter: blur(10px); box-shadow: inset 0 1px 0 rgba(148,163,184,0.08);"
+              />
+              <div class="input-glow"></div>
+            </div>
           </div>
 
           <div class="form-group">
-            <label for="profile-username">Username</label>
-            <input
-              id="profile-username"
-              type="text"
-              bind:value={profileUsername}
-              placeholder="admin"
-              required
-            />
+            <label for="profile-email">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 8px;">
+                <path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+              </svg>
+              Email Address
+            </label>
+            <div class="input-wrapper">
+              <input
+                id="profile-email"
+                type="email"
+                name="email"
+                autocomplete="email"
+                bind:value={profileEmail}
+                placeholder="your.email@example.com"
+                required
+                style="width: 100%; padding: 16px 20px; border: 2px solid rgba(148,163,184,0.15); border-radius: 14px; background: rgba(15,23,42,0.4); color: #f1f5f9; font-size: 1rem; font-weight: 500; transition: all 0.3s ease; backdrop-filter: blur(10px); box-shadow: inset 0 1px 0 rgba(148,163,184,0.08);"
+              />
+              <div class="input-glow"></div>
+            </div>
           </div>
 
           <div class="form-group">
-            <label for="profile-password">New Password (optional)</label>
-            <input
-              id="profile-password"
-              type="password"
-              bind:value={profilePassword}
-              placeholder="Leave empty to keep current password"
-            />
+            <label for="profile-password">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 8px;">
+                <path d="M18,8h-1V6c0-2.76-2.24-5-5-5S7,3.24,7,6v2H6c-1.1,0-2,0.9-2,2v10c0,1.1,0.9,2,2,2h12c1.1,0,2-0.9,2-2V10C20,8.9,19.1,8,18,8z M12,17c-1.1,0-2-0.9-2-2s0.9-2,2-2s2,0.9,2,2S13.1,17,12,17z M15.1,8H8.9V6c0-1.71,1.39-3.1,3.1-3.1s3.1,1.39,3.1,3.1V8z"/>
+              </svg>
+              New Password <span style="color: #94a3b8; font-weight: 400;">(optional)</span>
+            </label>
+            <div class="input-wrapper">
+              <input
+                id="profile-password"
+                type="password"
+                name="new-password"
+                autocomplete="new-password"
+                bind:value={profilePassword}
+                placeholder="Leave empty to keep current password"
+                style="width: 100%; padding: 16px 20px; border: 2px solid rgba(148,163,184,0.15); border-radius: 14px; background: rgba(15,23,42,0.4); color: #f1f5f9; font-size: 1rem; font-weight: 500; transition: all 0.3s ease; backdrop-filter: blur(10px); box-shadow: inset 0 1px 0 rgba(148,163,184,0.08);"
+              />
+              <div class="input-glow"></div>
+            </div>
           </div>
 
-          <div class="modal-actions">
-            <button type="button" class="btn-secondary" on:click={closeProfileModal}>
+          <!-- Button Row (all 3 buttons in one line) -->
+          <div style="display: flex; gap: 12px; margin-top: 32px; padding-top: 24px; border-top: 1px solid rgba(148,163,184,0.15);">
+            <button 
+              type="button" 
+              class="btn-danger" 
+              on:click={deleteAllHistory}
+              style="flex: 1; padding: 14px 20px; background: linear-gradient(135deg, rgba(239,68,68,0.15) 0%, rgba(220,38,38,0.2) 100%); color: #fca5a5; border: 1px solid rgba(239,68,68,0.4); border-radius: 12px; font-weight: 600; font-size: 0.95rem; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 4px 12px rgba(239,68,68,0.15);"
+            >
+              Delete All
+            </button>
+            
+            <button 
+              type="button" 
+              class="btn-cancel" 
+              on:click={closeProfileModal}
+              style="flex: 1; padding: 14px 20px; background: rgba(148,163,184,0.12); color: #cbd5e1; border: 1px solid rgba(148,163,184,0.25); border-radius: 12px; font-weight: 600; font-size: 0.95rem; cursor: pointer; transition: all 0.3s ease; backdrop-filter: blur(8px);"
+            >
               Cancel
             </button>
-            <button type="submit" class="btn-primary" disabled={isUpdatingProfile}>
-              {isUpdatingProfile ? "Updating..." : "Update Profile"}
+            
+            <button 
+              type="submit" 
+              class="btn-save" 
+              disabled={isUpdatingProfile}
+              style="flex: 1; padding: 14px 20px; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%); color: white; border: none; border-radius: 12px; font-weight: 600; font-size: 0.95rem; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 4px 14px rgba(99,102,241,0.3), inset 0 1px 0 rgba(255,255,255,0.15); position: relative; overflow: hidden;"
+            >
+              <span style="position: relative; z-index: 1;">
+                {isUpdatingProfile ? "Saving..." : "Save Changes"}
+              </span>
+              <div style="position: absolute; top: 0; left: -100%; width: 100%; height: 100%; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent); transition: left 0.6s;"></div>
             </button>
           </div>
         </form>
@@ -1057,6 +1316,240 @@ async function deleteConversation(conversationId) {
     </div>
   </div>
 {/if}
+
+
+
+
+<style>
+  /* Custom input and label styling for both themes */
+  :global(.form-group) {
+    margin-bottom: 24px;
+  }
+  
+  :global(.form-group label) {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    transition: color 0.3s ease;
+  }
+  
+  /* Dark theme labels */
+  :global([data-theme="dark"] .form-group label),
+  :global(.form-group label) {
+    color: #e2e8f0;
+  }
+  
+  /* Light theme labels */
+  :global([data-theme="light"] .form-group label) {
+    color: #374151;
+    text-shadow: 0 1px 2px rgba(255,255,255,0.5);
+  }
+  
+  :global(.input-wrapper) {
+    position: relative;
+  }
+  
+  :global(.input-glow) {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-radius: 14px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+    z-index: -1;
+  }
+  
+  /* Dark theme input glow */
+  :global([data-theme="dark"] .input-glow),
+  :global(.input-glow) {
+    background: linear-gradient(135deg, rgba(99,102,241,0.1) 0%, rgba(168,85,247,0.1) 100%);
+  }
+  
+  /* Light theme input glow */
+  :global([data-theme="light"] .input-glow) {
+    background: linear-gradient(135deg, rgba(236,72,153,0.08) 0%, rgba(168,85,247,0.08) 100%);
+  }
+  
+  :global(.form-group input:focus + .input-glow) {
+    opacity: 1;
+  }
+  
+  /* Dark theme input focus */
+  :global([data-theme="dark"] .form-group input:focus),
+  :global(.form-group input:focus) {
+    border-color: rgba(99,102,241,0.6) !important;
+    background: rgba(15,23,42,0.7) !important;
+    box-shadow: 0 0 0 3px rgba(99,102,241,0.12), inset 0 1px 0 rgba(148,163,184,0.1), 0 8px 25px rgba(99,102,241,0.15) !important;
+    transform: translateY(-1px) !important;
+  }
+  
+  /* Light theme input focus */
+  :global([data-theme="light"] .form-group input:focus) {
+    border-color: rgba(236,72,153,0.6) !important;
+    background: rgba(255,255,255,0.9) !important;
+    box-shadow: 0 0 0 3px rgba(236,72,153,0.08), inset 0 1px 0 rgba(148,163,184,0.1), 0 8px 25px rgba(236,72,153,0.1) !important;
+    transform: translateY(-1px) !important;
+    color: #1f2937 !important;
+  }
+  
+  /* Dark theme placeholder */
+  :global([data-theme="dark"] .form-group input::placeholder),
+  :global(.form-group input::placeholder) {
+    color: #64748b;
+    font-style: italic;
+  }
+  
+  /* Light theme placeholder */
+  :global([data-theme="light"] .form-group input::placeholder) {
+    color: #9ca3af;
+    font-style: italic;
+  }
+  
+  /* Dark theme button hover effects */
+  :global([data-theme="dark"] .btn-cancel:hover),
+  :global(.btn-cancel:hover) {
+    background: rgba(148,163,184,0.18) !important;
+    color: #f1f5f9 !important;
+    border-color: rgba(148,163,184,0.35) !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 6px 20px rgba(148,163,184,0.2) !important;
+  }
+  
+  /* Light theme button hover effects */
+  :global([data-theme="light"] .btn-cancel:hover) {
+    background: rgba(148,163,184,0.15) !important;
+    color: #1f2937 !important;
+    border-color: rgba(148,163,184,0.3) !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 6px 20px rgba(148,163,184,0.15) !important;
+  }
+  
+  :global(.btn-save:hover:not(:disabled)) {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 8px 25px rgba(99,102,241,0.4), inset 0 1px 0 rgba(255,255,255,0.25) !important;
+  }
+  
+  :global(.btn-save:hover:not(:disabled) > div) {
+    left: 100% !important;
+  }
+  
+  :global(.btn-danger:hover) {
+    background: linear-gradient(135deg, rgba(239,68,68,0.25) 0%, rgba(220,38,38,0.35) 100%) !important;
+    color: #fff !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 8px 25px rgba(239,68,68,0.3) !important;
+  }
+  
+  :global(.btn-save:disabled) {
+    opacity: 0.6 !important;
+    cursor: not-allowed !important;
+    transform: none !important;
+  }
+  
+  /* Modal content spacing - responsive to theme */
+  :global([data-theme="dark"] .modal-content),
+  :global(.modal-content) {
+    /* Dark theme handled by inline styles */
+    padding: 24px 32px 28px 32px;
+  }
+  
+  :global([data-theme="light"] .modal-content) {
+    background: rgba(248,250,252,0.8) !important;
+    border-radius: 0 0 16px 16px !important;
+    backdrop-filter: blur(10px) !important;
+  }
+  
+  :global([data-theme="dark"] .modal-header),
+  :global(.modal-header) {
+    /* Dark theme handled by inline styles */
+    padding: 20px 32px 16px 32px;
+  }
+  
+  :global([data-theme="light"] .modal-header) {
+    background: linear-gradient(145deg, #fef7ff 0%, #f8fafc 100%) !important;
+    border-bottom: 2px solid rgba(236,72,153,0.15) !important;
+    border-radius: 16px 16px 0 0 !important;
+  }
+  
+  :global([data-theme="light"] .modal-header h2) {
+    background: linear-gradient(135deg, #1f2937 0%, #374151 100%) !important;
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    background-clip: text !important;
+  }
+  
+  /* Error/Success messages for both themes */
+  :global(.error-message), :global(.success-message) {
+    margin-bottom: 20px;
+    padding: 14px 18px;
+    border-radius: 12px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    backdrop-filter: blur(8px);
+  }
+  
+  :global(.error-message) {
+    background: linear-gradient(135deg, rgba(239,68,68,0.12) 0%, rgba(220,38,38,0.15) 100%);
+    border: 1px solid rgba(239,68,68,0.25);
+    box-shadow: 0 4px 12px rgba(239,68,68,0.1);
+  }
+  
+  :global([data-theme="dark"] .error-message) {
+    color: #fca5a5;
+  }
+  
+  :global([data-theme="light"] .error-message) {
+    color: #dc2626;
+    background: linear-gradient(135deg, rgba(239,68,68,0.08) 0%, rgba(220,38,38,0.1) 100%);
+  }
+  
+  :global(.success-message) {
+    background: linear-gradient(135deg, rgba(34,197,94,0.12) 0%, rgba(22,163,74,0.15) 100%);
+    border: 1px solid rgba(34,197,94,0.25);
+    box-shadow: 0 4px 12px rgba(34,197,94,0.1);
+  }
+  
+  :global([data-theme="dark"] .success-message) {
+    color: #86efac;
+  }
+  
+  :global([data-theme="light"] .success-message) {
+    color: #16a34a;
+    background: linear-gradient(135deg, rgba(34,197,94,0.08) 0%, rgba(22,163,74,0.1) 100%);
+  }
+  
+  /* Light theme input styling */
+  :global([data-theme="light"] .form-group input) {
+    background: rgba(255,255,255,0.7) !important;
+    border: 2px solid rgba(148,163,184,0.2) !important;
+    color: #1f2937 !important;
+    backdrop-filter: blur(8px) !important;
+  }
+  
+  /* Light theme button styling */
+  :global([data-theme="light"] .btn-cancel) {
+    background: rgba(148,163,184,0.1) !important;
+    color: #64748b !important;
+    border: 1px solid rgba(148,163,184,0.3) !important;
+  }
+  
+  :global([data-theme="light"] .btn-danger) {
+    background: linear-gradient(135deg, rgba(239,68,68,0.12) 0%, rgba(220,38,38,0.15) 100%) !important;
+    color: #dc2626 !important;
+    border: 1px solid rgba(239,68,68,0.3) !important;
+  }
+  
+  :global([data-theme="light"] .btn-danger:hover) {
+    background: linear-gradient(135deg, rgba(239,68,68,0.2) 0%, rgba(220,38,38,0.25) 100%) !important;
+    color: #991b1b !important;
+  }
+</style>
 
 
 
