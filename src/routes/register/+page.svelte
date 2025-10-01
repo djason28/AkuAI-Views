@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import "../../lib/styles/global.css";
   import "../../lib/styles/register.css";
+  import { setAuth } from "../../lib/stores/auth.js";
 
   const API_URL = "http://127.0.0.1:5000";
 
@@ -15,9 +16,12 @@
   let showPassword = false;
   let showConfirmPassword = false;
   let isLoading = false;
-  let isDarkMode = true; // Default to dark mode
+  let isDarkMode = true;
+  let emailFieldFocused = false;
+  let usernameFieldFocused = false;
+  let passwordFieldFocused = false;
+  let confirmPasswordFieldFocused = false; 
 
-  // Theme management
   function applyTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('theme', theme);
@@ -25,7 +29,6 @@
   }
 
   onMount(() => {
-    // Load saved theme or default to dark
     const savedTheme = localStorage.getItem('theme') || 'dark';
     applyTheme(savedTheme);
   });
@@ -34,16 +37,19 @@
     errorMsg = "";
     successMsg = "";
 
-    // Validasi client-side
     if (!email.trim() || !username.trim() || !password.trim() || !confirmPassword.trim()) {
       errorMsg = "Email, username, password, dan konfirmasi password wajib diisi";
       return;
     }
 
-    // Validasi format email
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email.trim())) {
       errorMsg = "Format email tidak valid";
+      return;
+    }
+
+    if (!email.trim().toLowerCase().endsWith('@gmail.com')) {
+      errorMsg = "Email harus menggunakan alamat @gmail.com";
       return;
     }
 
@@ -52,7 +58,6 @@
       return;
     }
 
-    // Validasi password sesuai backend: minimal 1 huruf dan 1 angka
     if (!/(?=.*[a-zA-Z])(?=.*\d)/.test(password)) {
       errorMsg = "Password harus mengandung minimal 1 huruf dan 1 angka";
       return;
@@ -108,7 +113,6 @@
 
 <div class="register-container">
   <div class="register-box">
-    <!-- Theme Toggle -->
     <div class="theme-controls">
       <button class="theme-btn" class:active={isDarkMode} aria-label="Switch to dark mode" on:click={() => applyTheme('dark')}>
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -133,80 +137,108 @@
       <p class="success">{successMsg}</p>
     {/if}
 
-    <input
-      type="email"
-      placeholder="Email"
-      bind:value={email}
-      on:keydown={handleKeydown}
-      disabled={isLoading}
-      maxlength="100"
-    />
-
-    <input
-      type="text"
-      placeholder="Username"
-      bind:value={username}
-      on:keydown={handleKeydown}
-      disabled={isLoading}
-      maxlength="50"
-    />
-    
-    <div class="password-container">
+    <div class="form-group">
       <input
-        type={showPassword ? "text" : "password"}
-        placeholder="Password"
-        bind:value={password}
+        id="email"
+        type="email"
+        bind:value={email}
+        on:focus={() => emailFieldFocused = true}
+        on:blur={() => emailFieldFocused = false}
         on:keydown={handleKeydown}
         disabled={isLoading}
+        maxlength="100"
       />
-      <button
-        type="button"
-        class="toggle-password"
-        on:click={() => showPassword = !showPassword}
-        disabled={isLoading}
-        aria-label={showPassword ? "Hide password" : "Show password"}
-      >
-        {#if showPassword}
-          <!-- Eye OFF icon -->
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M2.22 2.22a.75.75 0 0 1 1.06 0L21.06 20a.75.75 0 1 1-1.06 1.06L17.73 18.8c-1.5.97-3.36 1.7-5.73 1.7-6 0-10.5-6-10.5-6a16.8 16.8 0 0 1 4.37-4.6L2.22 3.28a.75.75 0 0 1 0-1.06zM7.8 6.6l1.83 1.83A3 3 0 0 1 12 8a3 3 0 0 1 2.38.8L16.2 6.6C14.9 5.6 13.5 5 12 5c-1.5 0-2.9.6-4.2 1.6zm8.4 8.4-1.83-1.83A3 3 0 0 1 12 14a3 3 0 0 1-2.38-.8L7.8 15.4C9.1 16.4 10.5 17 12 17c1.5 0 2.9-.6 4.2-1.6zM12 6.5c-3.04 0-5.5 2.46-5.5 5.5 0 .35.03.69.09 1.02L8.4 11.2A3.5 3.5 0 0 1 12 6.5z"/>
-          </svg>
-        {:else}
-          <!-- Eye ON icon -->
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
-          </svg>
-        {/if}
-      </button>
+      <label 
+        for="email" 
+        class:filled={email || emailFieldFocused}
+      >Email</label>
     </div>
 
-    <div class="password-container">
+    <div class="form-group">
       <input
-        type={showConfirmPassword ? "text" : "password"}
-        placeholder="Konfirmasi Password"
-        bind:value={confirmPassword}
+        id="username"
+        type="text"
+        bind:value={username}
+        on:focus={() => usernameFieldFocused = true}
+        on:blur={() => usernameFieldFocused = false}
         on:keydown={handleKeydown}
         disabled={isLoading}
+        maxlength="50"
       />
-      <button
-        type="button"
-        class="toggle-password"
-        on:click={() => showConfirmPassword = !showConfirmPassword}
-        disabled={isLoading}
-        aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
-      >
-        {#if showConfirmPassword}
-          <!-- Eye OFF icon -->
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M2.22 2.22a.75.75 0 0 1 1.06 0L21.06 20a.75.75 0 1 1-1.06 1.06L17.73 18.8c-1.5.97-3.36 1.7-5.73 1.7-6 0-10.5-6-10.5-6a16.8 16.8 0 0 1 4.37-4.6L2.22 3.28a.75.75 0 0 1 0-1.06zM7.8 6.6l1.83 1.83A3 3 0 0 1 12 8a3 3 0 0 1 2.38.8L16.2 6.6C14.9 5.6 13.5 5 12 5c-1.5 0-2.9.6-4.2 1.6zm8.4 8.4-1.83-1.83A3 3 0 0 1 12 14a3 3 0 0 1-2.38-.8L7.8 15.4C9.1 16.4 10.5 17 12 17c1.5 0 2.9-.6 4.2-1.6zM12 6.5c-3.04 0-5.5 2.46-5.5 5.5 0 .35.03.69.09 1.02L8.4 11.2A3.5 3.5 0 0 1 12 6.5z"/>
-          </svg>
-        {:else}
-          <!-- Eye ON icon -->
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
-          </svg>
-        {/if}
-      </button>
+      <label 
+        for="username" 
+        class:filled={username || usernameFieldFocused}
+      >Username</label>
+    </div>
+    
+    <div class="form-group password-group">
+      <div class="password-container">
+        <input
+          id="password"
+          type={showPassword ? "text" : "password"}
+          bind:value={password}
+          on:focus={() => passwordFieldFocused = true}
+          on:blur={() => passwordFieldFocused = false}
+          on:keydown={handleKeydown}
+          disabled={isLoading}
+        />
+        <label 
+          for="password" 
+          class:filled={password || passwordFieldFocused}
+        >Password</label>
+        <button
+          type="button"
+          class="toggle-password"
+          on:click={() => showPassword = !showPassword}
+          disabled={isLoading}
+          aria-label={showPassword ? "Hide password" : "Show password"}
+        >
+          {#if showPassword}
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M2.22 2.22a.75.75 0 0 1 1.06 0L21.06 20a.75.75 0 1 1-1.06 1.06L17.73 18.8c-1.5.97-3.36 1.7-5.73 1.7-6 0-10.5-6-10.5-6a16.8 16.8 0 0 1 4.37-4.6L2.22 3.28a.75.75 0 0 1 0-1.06zM7.8 6.6l1.83 1.83A3 3 0 0 1 12 8a3 3 0 0 1 2.38.8L16.2 6.6C14.9 5.6 13.5 5 12 5c-1.5 0-2.9.6-4.2 1.6zm8.4 8.4-1.83-1.83A3 3 0 0 1 12 14a3 3 0 0 1-2.38-.8L7.8 15.4C9.1 16.4 10.5 17 12 17c1.5 0 2.9-.6 4.2-1.6zM12 6.5c-3.04 0-5.5 2.46-5.5 5.5 0 .35.03.69.09 1.02L8.4 11.2A3.5 3.5 0 0 1 12 6.5z"/>
+            </svg>
+          {:else}
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+            </svg>
+          {/if}
+        </button>
+      </div>
+    </div>
+
+    <div class="form-group password-group">
+      <div class="password-container">
+        <input
+          id="confirmPassword"
+          type={showConfirmPassword ? "text" : "password"}
+          bind:value={confirmPassword}
+          on:focus={() => confirmPasswordFieldFocused = true}
+          on:blur={() => confirmPasswordFieldFocused = false}
+          on:keydown={handleKeydown}
+          disabled={isLoading}
+        />
+        <label 
+          for="confirmPassword" 
+          class:filled={confirmPassword || confirmPasswordFieldFocused}
+        >Konfirmasi Password</label>
+        <button
+          type="button"
+          class="toggle-password"
+          on:click={() => showConfirmPassword = !showConfirmPassword}
+          disabled={isLoading}
+          aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
+        >
+          {#if showConfirmPassword}
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M2.22 2.22a.75.75 0 0 1 1.06 0L21.06 20a.75.75 0 1 1-1.06 1.06L17.73 18.8c-1.5.97-3.36 1.7-5.73 1.7-6 0-10.5-6-10.5-6a16.8 16.8 0 0 1 4.37-4.6L2.22 3.28a.75.75 0 0 1 0-1.06zM7.8 6.6l1.83 1.83A3 3 0 0 1 12 8a3 3 0 0 1 2.38.8L16.2 6.6C14.9 5.6 13.5 5 12 5c-1.5 0-2.9.6-4.2 1.6zm8.4 8.4-1.83-1.83A3 3 0 0 1 12 14a3 3 0 0 1-2.38-.8L7.8 15.4C9.1 16.4 10.5 17 12 17c1.5 0 2.9-.6 4.2-1.6zM12 6.5c-3.04 0-5.5 2.46-5.5 5.5 0 .35.03.69.09 1.02L8.4 11.2A3.5 3.5 0 0 1 12 6.5z"/>
+            </svg>
+          {:else}
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+            </svg>
+          {/if}
+        </button>
+      </div>
     </div>
 
     <button 

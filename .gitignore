@@ -42,3 +42,19 @@ coverage/
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Unit Test files (Go)
+*_test.go
+**/*_test.go
+**/testdata/
+testdata/
+test/
+tests/
+
+# Test coverage files
+coverage.out
+*.cover
+*.prof
+
+# Test binary files
+*.test
