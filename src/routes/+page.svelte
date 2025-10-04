@@ -8,7 +8,8 @@
   import "../lib/styles/input.css";       
   import "../lib/styles/modal.css";       
   import "../lib/styles/animation.css";  
-  import "../lib/styles/responsive.css"; 
+  import "../lib/styles/responsive.css";
+  import "../lib/styles/uib.css"; 
   import { formatBotMessage, formatStreamingBotMessage, formatUserMessage, isSessionComplete } from "../lib/utils/messageFormatter.js";
   import { authToken, username as usernameStore, handleApiError, clearAuth } from "../lib/stores/auth.js";
 
@@ -48,6 +49,8 @@
   let inputMessageElement;
   let passwordFieldFocused = false;
   let isStreaming = false;
+  let isUIBContext = false;
+  let uibIndicatorVisible = false;
   let streamAbortController = null;
   let stopRequested = false;          
   let nextSendBypassDuplicate = false; 
@@ -86,6 +89,9 @@
   let messagesRenderKey = 0;
   let showQuickChatDropdown = false;
   let quickChatItems = [
+    "Apa saja sertifikasi UIB bulan Oktober 2025?",
+    "Webinar apa saja yang diadakan UIB November?",
+    "Bagaimana cara daftar acara UIB Desember?",
     "Jelaskan tentang universitas terbaik di Indonesia",
     "Berikan informasi jurusan IT yang prospektif", 
     "Bagaimana cara memilih universitas yang tepat?",
@@ -290,11 +296,33 @@
     }
   }
 
+  // Function to detect UIB-related messages
+  function detectUIBContext(message) {
+    const uibKeywords = [
+      'uib', 'universitas internasional batam', 'batam',
+      'sertifikasi uib', 'webinar uib', 'acara uib',
+      'oktober uib', 'november uib', 'desember uib',
+      'pendaftaran uib', 'event uib', 'kegiatan uib'
+    ];
+    
+    const messageLower = message.toLowerCase();
+    return uibKeywords.some(keyword => messageLower.includes(keyword));
+  }
+
   async function sendMessage() {
     const text = inputMessage.trim();
     if (!text || isStreaming) return;
 
-    messages = [...messages, { sender: "user", text }];
+    // Check if message is UIB-related
+    isUIBContext = detectUIBContext(text);
+    if (isUIBContext) {
+      uibIndicatorVisible = true;
+      setTimeout(() => {
+        uibIndicatorVisible = false;
+      }, 5000); // Hide indicator after 5 seconds
+    }
+
+    messages = [...messages, { sender: "user", text, isUIBContext }];
     inputMessage = "";
     
     if (inputMessageElement) {
@@ -1176,7 +1204,16 @@ async function deleteConversation(conversationId) {
           <div class="message {msg.sender}" 
                class:streaming={msg.isStreaming} 
                class:formatted={msg._formatted}
-               class:nuclear={msg._nuclear}>
+               class:nuclear={msg._nuclear}
+               class:uib-context={msg.isUIBContext}>
+            
+            {#if msg.isUIBContext}
+              <div class="uib-indicator">
+                <span class="uib-badge">🏛️ UIB</span>
+                <span class="uib-text">Data resmi Universitas Internasional Batam</span>
+              </div>
+            {/if}
+            
             {#if msg.sender === 'bot'}
               {#if msg.isStreaming}
                 {@html formatStreamingBotMessage(msg.text)}
@@ -1216,6 +1253,17 @@ async function deleteConversation(conversationId) {
         </div>
       {/if}
     </div>
+
+  {#if uibIndicatorVisible}
+    <div class="uib-context-banner">
+      <div class="uib-banner-content">
+        <span class="uib-icon">🏛️</span>
+        <span class="uib-banner-text">
+          <strong>Mode UIB Aktif</strong> - Menggunakan data resmi Universitas Internasional Batam
+        </span>
+      </div>
+    </div>
+  {/if}
 
   <footer class="chat-input" bind:this={chatInputElement}>
       <button 

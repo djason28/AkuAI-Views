@@ -1,0 +1,172 @@
+/* UIB Context Styling */
+.uib-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 12px;
+  background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+  border-radius: 16px;
+  font-size: 0.75rem;
+  color: white;
+  box-shadow: 0 2px 8px rgba(30, 64, 175, 0.3);
+  animation: uib-fade-in 0.3s ease-out;
+}
+
+.uib-badge {
+  font-weight: 600;
+  font-size: 0.7rem;
+  background: rgba(255, 255, 255, 0.2);
+  padding: 2px 6px;
+  border-radius: 8px;
+}
+
+.uib-text {
+  font-weight: 500;
+  font-size: 0.7rem;
+  opacity: 0.9;
+}
+
+/* UIB Context Banner */
+.uib-context-banner {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  animation: uib-slide-down 0.4s ease-out;
+}
+
+.uib-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+  border-radius: 20px;
+  color: white;
+  font-size: 0.85rem;
+  box-shadow: 0 4px 20px rgba(30, 64, 175, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.uib-icon {
+  font-size: 1.2rem;
+  animation: uib-pulse 2s infinite;
+}
+
+.uib-banner-text {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.uib-banner-text strong {
+  font-weight: 600;
+}
+
+/* Message with UIB context */
+.message.uib-context {
+  border-left: 3px solid #3b82f6;
+  background: linear-gradient(135deg, rgba(30, 64, 175, 0.05) 0%, rgba(59, 130, 246, 0.05) 100%);
+}
+
+.message.user.uib-context {
+  background: linear-gradient(135deg, rgba(30, 64, 175, 0.1) 0%, rgba(59, 130, 246, 0.1) 100%);
+}
+
+/* Animations */
+@keyframes uib-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes uib-slide-down {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+@keyframes uib-pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+/* Dark theme adjustments */
+[data-theme="dark"] .uib-indicator {
+  background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
+  box-shadow: 0 2px 8px rgba(30, 58, 138, 0.4);
+}
+
+[data-theme="dark"] .uib-context-banner .uib-banner-content {
+  background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
+  box-shadow: 0 4px 20px rgba(30, 58, 138, 0.5);
+}
+
+[data-theme="dark"] .message.uib-context {
+  border-left-color: #2563eb;
+  background: linear-gradient(135deg, rgba(30, 58, 138, 0.1) 0%, rgba(37, 99, 235, 0.1) 100%);
+}
+
+[data-theme="dark"] .message.user.uib-context {
+  background: linear-gradient(135deg, rgba(30, 58, 138, 0.15) 0%, rgba(37, 99, 235, 0.15) 100%);
+}
+
+/* Light theme adjustments */
+[data-theme="light"] .uib-indicator {
+  background: linear-gradient(135deg, #2563eb 0%, #60a5fa 100%);
+  color: white;
+}
+
+[data-theme="light"] .uib-context-banner .uib-banner-content {
+  background: linear-gradient(135deg, #2563eb 0%, #60a5fa 100%);
+  color: white;
+}
+
+[data-theme="light"] .message.uib-context {
+  border-left-color: #2563eb;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08) 0%, rgba(96, 165, 250, 0.08) 100%);
+}
+
+[data-theme="light"] .message.user.uib-context {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.12) 0%, rgba(96, 165, 250, 0.12) 100%);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .uib-context-banner {
+    top: 70px;
+    left: 10px;
+    right: 10px;
+    transform: none;
+  }
+  
+  .uib-banner-content {
+    padding: 8px 12px;
+    font-size: 0.8rem;
+  }
+  
+  .uib-banner-text {
+    white-space: normal;
+    text-align: center;
+  }
+  
+  .uib-indicator {
+    padding: 4px 8px;
+    font-size: 0.7rem;
+  }
+}
