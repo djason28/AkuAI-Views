@@ -1,4 +1,7 @@
 <script>
+  // Image slider modal state
+  let sliderOpen = false;
+  let sliderIndex = 0;
   import { onMount, afterUpdate, onDestroy, tick } from "svelte";
   import { goto } from "$app/navigation";
   import "../lib/styles/layout.css";
@@ -9,7 +12,8 @@
   import "../lib/styles/modal.css";       
   import "../lib/styles/animation.css";  
   import "../lib/styles/responsive.css";
-  import "../lib/styles/uib.css"; 
+  import "../lib/styles/uib.css";
+  import "../lib/styles/images.css"; 
   import { formatBotMessage, formatStreamingBotMessage, formatUserMessage, isSessionComplete } from "../lib/utils/messageFormatter.js";
   import { authToken, username as usernameStore, handleApiError, clearAuth } from "../lib/stores/auth.js";
 
@@ -56,31 +60,10 @@
   let nextSendBypassDuplicate = false; 
   let runSeq = 0;
   let lastStoppedRunSeq = -1;
-
-  function stopStreaming() {
-    console.log("🛑 User clicked STOP button - stopping stream");
-    if (streamAbortController) {
-      try { streamAbortController.abort(); } catch (_) {}
-      streamAbortController = null;
-    }
-    stopRequested = true;
-    lastStoppedRunSeq = runSeq;
-    isStreaming = false;
-    showLoadingDots = false;
-
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m && m.sender === 'bot' && m.isStreaming) {
-        const updated = [...messages];
-        const finalText = m.text || "";
-        updated[i] = { ...m, isStreaming: false, _preFormattedHTML: formatBotMessage(finalText), _formatted: true };
-        messages = updated;
-        break;
-      }
-    }
-
-    nextSendBypassDuplicate = true;
-  }
+  let requestImages = false;
+  let searchingImages = false;
+  let currentImages = [];
+  let conversationImages = {}; // Store images per conversation
   
   let sessionCompleted = false;
   let showDoneIndicator = false;
@@ -170,15 +153,6 @@
   }
 
   let searchInputElement;
-  
-  function handleKeydown(event) {
-    if ((event.ctrlKey || event.metaKey) && event.key === 'k') {
-      event.preventDefault();
-      if (searchInputElement) {
-        searchInputElement.focus();
-      }
-    }
-  }
 
   let isComposing = false;
 
@@ -274,6 +248,9 @@
         currentConversation = conversationId;
         messages = [...data.messages]; 
         
+        // Load images for this conversation
+        currentImages = conversationImages[conversationId] || [];
+        
         showDoneIndicator = false;
         sessionCompleted = false;
         if (autoReloadTimer) {
@@ -290,6 +267,8 @@
     messages = [];
     showDoneIndicator = false;
     sessionCompleted = false;
+    currentImages = [];
+    searchingImages = false;
     if (autoReloadTimer) {
       clearTimeout(autoReloadTimer);
       autoReloadTimer = null;
@@ -309,6 +288,18 @@
     return uibKeywords.some(keyword => messageLower.includes(keyword));
   }
 
+  function stopStreaming() {
+    if (streamAbortController) {
+      console.log("🛑 Stop streaming requested by user");
+      lastStoppedRunSeq = runSeq; // Set this before aborting
+      streamAbortController.abort();
+      streamAbortController = null;
+      nextSendBypassDuplicate = true; // Allow bypassing duplicate check for next send
+    }
+    isStreaming = false;
+    stopRequested = true;
+  }
+
   async function sendMessage() {
     const text = inputMessage.trim();
     if (!text || isStreaming) return;
@@ -325,13 +316,20 @@
     messages = [...messages, { sender: "user", text, isUIBContext }];
     inputMessage = "";
     
+    // Reset image states when sending new message only if not requesting images
+    if (!requestImages) {
+      currentImages = [];
+    }
+    searchingImages = false;
+    
     if (inputMessageElement) {
       inputMessageElement.style.height = 'auto';
     }
 
     const payload = {
       message: text,
-      conversation_id: currentConversation || null
+      conversation_id: currentConversation || null,
+      request_images: requestImages
     };
 
   isStreaming = true;
@@ -522,10 +520,59 @@
             const chunk = data.replace(/\\n/g, "\n");
             pendingText += chunk;
             scheduleNextTick();
+          } else if (event === "images_searching") {
+            searchingImages = true;
+            console.log("🔍 Mencari gambar...");
+          } else if (event === "images_found") {
+            try {
+              const obj = JSON.parse(data);
+              if (obj && obj.images) {
+                currentImages = obj.images;
+                
+                // Store images for this conversation
+                if (currentConversation) {
+                  conversationImages[currentConversation] = obj.images;
+                }
+                
+                searchingImages = false;
+                console.log(`📸 Ditemukan ${obj.count} gambar:`, obj.images);
+                
+                // Auto-scroll to show images after a brief delay
+                setTimeout(() => {
+                  if (chatContainer) {
+                    chatContainer.scrollTo({
+                      top: chatContainer.scrollHeight,
+                      behavior: 'smooth'
+                    });
+                  }
+                }, 300);
+              }
+            } catch (e) {
+              console.error("Error parsing images data:", e);
+              searchingImages = false;
+            }
+          } else if (event === "images_empty") {
+            currentImages = [];
+            searchingImages = false;
+            console.log("📸 Tidak ada gambar ditemukan");
+          } else if (event === "images_error") {
+            try {
+              const obj = JSON.parse(data);
+              console.error("📸 Error mencari gambar:", obj.error);
+            } catch (e) {
+              console.error("📸 Error mencari gambar (unknown)");
+            }
+            searchingImages = false;
+            currentImages = [];
+          } else if (event === "images_disabled") {
+            console.log("📸 Fitur gambar belum dikonfigurasi");
+            searchingImages = false;
+            currentImages = [];
           } else if (event === "done") {
             console.log("🎯 DONE event received; finishing pacing...");
             paceDone = true;
             showLoadingDots = false;
+            searchingImages = false; // Reset image search state
             if (pendingText.length > 0 && !paceTimer) {
               scheduleNextTick();
             }
@@ -542,7 +589,7 @@
     } catch (err) {
       const wasManuallyStopped = lastStoppedRunSeq === myRunSeq;
       const isAbortError = err && err.name === 'AbortError';
-      if (!wasManuallyStopped || !isAbortError) {
+      if (!(wasManuallyStopped && isAbortError)) {
         console.error("Stream error:", err);
       }
 
@@ -983,8 +1030,7 @@ async function deleteConversation(conversationId) {
       ro = new ResizeObserver(() => updateFooterOffset());
       if (chatInputElement) ro.observe(chatInputElement);
     } catch (_) {}
-    window.addEventListener('resize', updateFooterOffset);
-    document.addEventListener('keydown', handleKeydown);
+  window.addEventListener('resize', updateFooterOffset);
     
     // Close dropdown when clicking outside
     const handleClickOutside = (event) => {
@@ -995,7 +1041,7 @@ async function deleteConversation(conversationId) {
     document.addEventListener('click', handleClickOutside);
     
     return () => {
-      document.removeEventListener('keydown', handleKeydown);
+  // removed handleKeydown global listener cleanup
       document.removeEventListener('click', handleClickOutside);
       if (searchTimeout) {
         clearTimeout(searchTimeout);
@@ -1024,6 +1070,8 @@ async function deleteConversation(conversationId) {
     }
   });
 </script>
+
+
 
 <div class="app" class:blurred={showProfileModal}>
   <header class="app-header">
@@ -1207,12 +1255,7 @@ async function deleteConversation(conversationId) {
                class:nuclear={msg._nuclear}
                class:uib-context={msg.isUIBContext}>
             
-            {#if msg.isUIBContext}
-              <div class="uib-indicator">
-                <span class="uib-badge">🏛️ UIB</span>
-                <span class="uib-text">Data resmi Universitas Internasional Batam</span>
-              </div>
-            {/if}
+
             
             {#if msg.sender === 'bot'}
               {#if msg.isStreaming}
@@ -1229,6 +1272,59 @@ async function deleteConversation(conversationId) {
             {/if}
           </div>
         {/each}    
+        
+        <!-- Image Search Results -->
+        {#if searchingImages}
+          <div class="image-searching">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12a9 9 0 11-6.219-8.56"/>
+            </svg>
+            Mencari gambar yang relevan...
+          </div>
+        {/if}
+        
+        {#if currentImages && currentImages.length > 0}
+          <div class="image-gallery">
+            <h4>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                <circle cx="8.5" cy="8.5" r="1.5"/>
+                <polyline points="21,15 16,10 5,21"/>
+              </svg>
+              Gambar Terkait ({currentImages.length})
+            </h4>
+            <div class="image-grid">
+              {#each currentImages as image, idx}
+                <div class="image-item">
+                  <img 
+                    src={image.thumbnail_url || image.image_url} 
+                    alt={image.title}
+                    loading="lazy"
+                    on:error={(e) => {
+                      // Fallback to main image if thumbnail fails
+                      if (e.target.src !== image.image_url) {
+                        e.target.src = image.image_url;
+                      } else {
+                        e.target.style.display = 'none';
+                        e.target.nextElementSibling.style.display = 'flex';
+                      }
+                    }}
+                  />
+                  <div class="image-overlay">
+                    <div class="image-title">{image.title}</div>
+                    <a href={image.source_url} 
+                       target="_blank" 
+                       rel="noopener noreferrer" 
+                       class="image-source">
+                      Lihat sumber →
+                    </a>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+        
         {#if showLoadingDots}
           <div class="bot-loading">
             <div class="loading-spinner">
@@ -1254,16 +1350,7 @@ async function deleteConversation(conversationId) {
       {/if}
     </div>
 
-  {#if uibIndicatorVisible}
-    <div class="uib-context-banner">
-      <div class="uib-banner-content">
-        <span class="uib-icon">🏛️</span>
-        <span class="uib-banner-text">
-          <strong>Mode UIB Aktif</strong> - Menggunakan data resmi Universitas Internasional Batam
-        </span>
-      </div>
-    </div>
-  {/if}
+
 
   <footer class="chat-input" bind:this={chatInputElement}>
       <button 
@@ -1308,6 +1395,20 @@ async function deleteConversation(conversationId) {
         on:input={() => { autoResizeTextarea(); updateFooterOffset(); }}
         rows="1"
       ></textarea>
+      
+      <button 
+        class="image-toggle-btn" 
+        class:active={requestImages}
+        on:click={() => requestImages = !requestImages}
+        aria-label="Toggle pencarian gambar"
+        title={requestImages ? "Matikan pencarian gambar" : "Nyalakan pencarian gambar"}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+          <circle cx="8.5" cy="8.5" r="1.5"/>
+          <polyline points="21,15 16,10 5,21"/>
+        </svg>
+      </button>
       
       <button 
         class="send-btn" 
@@ -2259,6 +2360,9 @@ async function deleteConversation(conversationId) {
     }
   }
 </style>
+
+<!-- Image Modal -->
+
 
 
 
