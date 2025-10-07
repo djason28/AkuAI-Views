@@ -3,6 +3,120 @@
  * Converts plain text with markdown-like syntax to formatted HTML
  */
 
+export function normalizeWhitespace(text) {
+  if (!text) return '';
+
+  let normalized = text
+    .replace(/\r\n?/g, '\n')
+    .replace(/\u00A0/g, ' ')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .replace(/\t+/g, ' ');
+
+  // First, add spaces where they're missing (like "webinarUIB" -> "webinar UIB")
+  normalized = normalized.replace(/(\w)([A-Z][a-z]+)/g, '$1 $2');
+
+  // Apply multiple passes to fix specific spacing issues
+  for (let i = 0; i < 2; i++) {
+    // Fix common broken words with direct replacements
+    const wordReplacements = {
+      'Cr ypto': 'Crypto',
+      'C rypto': 'Crypto', 
+      'You Tube': 'YouTube',
+      'YouTube Liv e': 'YouTube Live',
+      'D evelopment': 'Development',
+      'C areer': 'Career',
+      'Tech nology': 'Technology',
+      'Persyara tan': 'Persyaratan',
+      'pese rta': 'peserta',
+      'untukumum': 'untuk umum',
+      'lebihlanjut': 'lebih lanjut',
+      'menghub ungi': 'menghubungi',
+      'de ngan': 'dengan',
+      'se perti': 'seperti',
+      'meng gunakan': 'menggunakan',
+      'Pembic ara': 'Pembicara',
+      'Engi neer': 'Engineer',
+      'Shope e': 'Shopee',
+      'No vember': 'November',
+      'Peneli ti': 'Peneliti',
+      'Developmen t': 'Development',
+      'Priorita s': 'Prioritas',
+      'unt uk': 'untuk',
+      'h ttps': 'https',
+      'h ttp': 'http',
+      '2 025': '2025',
+      '1 6:00': '16:00',
+      '1 5:00': '15:00',
+      '1 4:00': '14:00',
+      '1 9:00': '19:00',
+      '2 0:00': '20:00',
+      '2 1:00': '21:00',
+      'ui b.ac.id': 'uib.ac.id',
+      'Platfor m': 'Platform',
+      'D epartemen': 'Departemen',
+      'leb ih': 'lebih',
+      'k ontak': 'kontak',
+      'i nfo': 'info',
+      'info@uib.a c.id': 'info@uib.ac.id',
+      'untu k': 'untuk',
+      'U IB': 'UIB',
+      'Sertifi kasi': 'Sertifikasi',
+      'B usiness': 'Business',
+      'Lokas i': 'Lokasi',
+      '500.00 0': '500.000',
+      '750.00 0': '750.000',
+      'marketin g': 'marketing',
+      '2025-10 -18': '2025-10-18',
+      'K omputer': 'Komputer',
+      'it-certification @': 'it-certification@',
+      'Sertifikas i': 'Sertifikasi',
+      'Profes ional': 'Profesional',
+      'Tang gal': 'Tanggal',
+      'Wa ktu': 'Waktu',
+      'L okasi': 'Lokasi',
+      'akuntansi@uib. ac.id': 'akuntansi@uib.ac.id',
+      'Bah asa': 'Bahasa',
+      'Language Ce nter': 'Language Center',
+      'l anguagecenter': 'languagecenter',
+      'Manag ement': 'Management',
+      '09:00-17:3 0': '09:00-17:30',
+      'Se minar': 'Seminar',
+      'management@uib.ac. id': 'management@uib.ac.id',
+      'ht tps': 'https',
+    };
+    
+    for (const [broken, fixed] of Object.entries(wordReplacements)) {
+      normalized = normalized.replace(new RegExp(broken, 'g'), fixed);
+    }
+
+    // Fix broken numbers and time patterns with regex
+    normalized = normalized.replace(/(\d)\s+(\d):(\d+)/g, '$1$2:$3');         // "1 6:00" -> "16:00"
+    normalized = normalized.replace(/(\d)\s+(\d{3})/g, '$1$2');               // "2 025" -> "2025"
+    normalized = normalized.replace(/(\d{4})-(\d{2})\s+-(\d+)/g, '$1-$2-$3'); // "2025-10 -18" -> "2025-10-18"
+    normalized = normalized.replace(/(\d+)\.(\d+)\s+(\d+)/g, '$1.$2$3');      // "500.00 0" -> "500.000"
+    normalized = normalized.replace(/(https?)\s*:\s*\/\/\s*(\w)/g, '$1://$2'); // "h ttps : // u" -> "https://u"
+    normalized = normalized.replace(/(\w+)\s+\.\s*(\w+)\s*\.\s*(\w+)/g, '$1.$2.$3'); // "ui b.ac.id" -> "uib.ac.id"
+    normalized = normalized.replace(/(\w+)\s*@\s*(\w+)\s*\.\s*(\w+)\s*\.\s*(\w+)/g, '$1@$2.$3.$4'); // "info@uib. ac.id" -> "info@uib.ac.id"
+    normalized = normalized.replace(/\b([A-Z][a-z]{1,3})\s+([a-z]{2,})\b/g, '$1$2'); // "Sertifi kasi" -> "Sertifikasi"
+    
+    // Fix excessive spacing (3+ spaces only, preserve normal single spaces)
+    normalized = normalized.replace(/(\w)\s{3,}(\w)/g, '$1 $2');
+    
+    // Collapse only multiple spaces (2+ become single)
+    normalized = normalized.replace(/ {2,}/g, ' ');
+  }
+
+  return normalized
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .join('\n')
+    .trim();
+}
+
 /**
  * Format a bot message with proper text styling, lists, and colors
  * @param {string} text - Raw text from the bot
@@ -13,8 +127,10 @@ export function formatBotMessage(text) {
     return '';
   }
 
+  const cleaned = normalizeWhitespace(text);
+
   // Normalize newlines and escape HTML
-  let textEsc = text.replace(/\r\n/g, '\n')
+  let textEsc = cleaned.replace(/\r\n/g, '\n')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
@@ -136,7 +252,7 @@ export function formatStreamingBotMessage(text) {
     return '';
   }
 
-  let formatted = text;
+  let formatted = normalizeWhitespace(text);
 
   // Escape HTML
   formatted = formatted

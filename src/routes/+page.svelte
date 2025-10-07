@@ -14,7 +14,7 @@
   import "../lib/styles/responsive.css";
   import "../lib/styles/uib.css";
   import "../lib/styles/images.css"; 
-  import { formatBotMessage, formatStreamingBotMessage, formatUserMessage, isSessionComplete } from "../lib/utils/messageFormatter.js";
+  import { formatBotMessage, formatStreamingBotMessage, formatUserMessage, isSessionComplete, normalizeWhitespace } from "../lib/utils/messageFormatter.js";
   import { authToken, username as usernameStore, handleApiError, clearAuth } from "../lib/stores/auth.js";
 
   if (typeof document !== 'undefined') {
@@ -63,7 +63,9 @@
   let requestImages = false;
   let searchingImages = false;
   let currentImages = [];
+  let imageSearchInfo = null;
   let conversationImages = {}; // Store images per conversation
+  let conversationImageMeta = {}; // Store image metadata per conversation
   
   let sessionCompleted = false;
   let showDoneIndicator = false;
@@ -73,13 +75,13 @@
   let showQuickChatDropdown = false;
   let quickChatItems = [
     "Apa saja sertifikasi UIB bulan Oktober 2025?",
-    "Webinar apa saja yang diadakan UIB November?",
+    "Webinar apa saja yang diadakan UIB November 2025?",
     "Bagaimana cara daftar acara UIB Desember?",
-    "Jelaskan tentang universitas terbaik di Indonesia",
-    "Berikan informasi jurusan IT yang prospektif", 
-    "Bagaimana cara memilih universitas yang tepat?",
-    "Apa saja persyaratan masuk universitas negeri?",
-    "Ceritakan tentang biaya kuliah di berbagai universitas",
+    "Jelaskan tentang universitas Universitas Internasional Batam",
+    "Berikan informasi jurusan yang ada di UIB", 
+    "Bagaimana cara jurusan yang tepat?",
+    "Apa saja persyaratan masuk Universitas Internasional Batam?",
+    "Ceritakan tentang biaya kuliah di Universitas Internasional Batam",
     "Rekomendasikan beasiswa terbaru dan syaratnya"
   ];
 
@@ -246,10 +248,25 @@
     if (res && res.ok) {
         const data = await res.json();
         currentConversation = conversationId;
-        messages = [...data.messages]; 
+        messages = data.messages.map((msg) => {
+          if (!msg || typeof msg !== 'object') return msg;
+          const base = { ...msg };
+          if (typeof base.text === 'string') {
+            base.text = normalizeWhitespace(base.text);
+          }
+          if (base.sender === 'bot') {
+            base._preFormattedHTML = formatBotMessage(base.text || '');
+            base._formatted = true;
+            base.isStreaming = false;
+          }
+          return base;
+        });
+        messagesRenderKey += 1;
         
-        // Load images for this conversation
-        currentImages = conversationImages[conversationId] || [];
+  // Load images for this conversation
+  currentImages = conversationImages[conversationId] || [];
+  imageSearchInfo = conversationImageMeta[conversationId] || null;
+  searchingImages = false;
         
         showDoneIndicator = false;
         sessionCompleted = false;
@@ -269,9 +286,20 @@
     sessionCompleted = false;
     currentImages = [];
     searchingImages = false;
+    imageSearchInfo = null;
     if (autoReloadTimer) {
       clearTimeout(autoReloadTimer);
       autoReloadTimer = null;
+    }
+  }
+
+  function toggleRequestImages() {
+    requestImages = !requestImages;
+    if (!requestImages) {
+      searchingImages = false;
+      if (!currentImages || currentImages.length === 0) {
+        imageSearchInfo = null;
+      }
     }
   }
 
@@ -304,6 +332,8 @@
     const text = inputMessage.trim();
     if (!text || isStreaming) return;
 
+    imageSearchInfo = null;
+
     // Check if message is UIB-related
     isUIBContext = detectUIBContext(text);
     if (isUIBContext) {
@@ -316,11 +346,19 @@
     messages = [...messages, { sender: "user", text, isUIBContext }];
     inputMessage = "";
     
-    // Reset image states when sending new message only if not requesting images
-    if (!requestImages) {
+    // Reset image states for new requests
+    if (requestImages) {
       currentImages = [];
+      searchingImages = true;
+      if (currentConversation) {
+        conversationImages[currentConversation] = [];
+        conversationImageMeta[currentConversation] = null;
+      }
+    } else {
+      currentImages = [];
+      imageSearchInfo = null;
+      searchingImages = false;
     }
-    searchingImages = false;
     
     if (inputMessageElement) {
       inputMessageElement.style.height = 'auto';
@@ -423,9 +461,10 @@
         } else {
           if (botIndex >= 0 && messages[botIndex]) {
             const updated = [...messages];
-            const finalText = (updated[botIndex].text || "");
+            const finalText = normalizeWhitespace(updated[botIndex].text || "");
             updated[botIndex] = { 
               ...updated[botIndex], 
+              text: finalText,
               isStreaming: false,
               _preFormattedHTML: formatBotMessage(finalText),
               _formatted: true
@@ -521,23 +560,59 @@
             pendingText += chunk;
             scheduleNextTick();
           } else if (event === "images_searching") {
-            searchingImages = true;
-            console.log("🔍 Mencari gambar...");
+            try {
+              const obj = JSON.parse(data || '{}');
+              const query = obj.query || '';
+              const detected = obj.detected_university || '';
+              const message = obj.message || (query ? `Mencari gambar ${query}...` : "Mencari gambar yang relevan...");
+              imageSearchInfo = {
+                status: "searching",
+                message,
+                query,
+                primaryQuery: obj.query || query,
+                detectedUniversity: detected,
+                fallback: false,
+                error: ""
+              };
+              searchingImages = true;
+              console.log("🔍 Mencari gambar...", imageSearchInfo);
+            } catch (e) {
+              console.error("Error parsing images_searching payload:", e);
+              imageSearchInfo = {
+                status: "searching",
+                message: "Mencari gambar yang relevan...",
+                query: "",
+                primaryQuery: "",
+                detectedUniversity: "",
+                fallback: false,
+                error: ""
+              };
+              searchingImages = true;
+            }
           } else if (event === "images_found") {
             try {
               const obj = JSON.parse(data);
               if (obj && obj.images) {
                 currentImages = obj.images;
-                
-                // Store images for this conversation
+                const meta = {
+                  status: "found",
+                  message: `Gambar untuk ${obj.query || obj.primary_query || "kampus"} siap ditampilkan`,
+                  query: obj.query || obj.primary_query || "",
+                  primaryQuery: obj.primary_query || obj.query || "",
+                  detectedUniversity: obj.detected_university || "",
+                  fallback: Boolean(obj.fallback),
+                  error: ""
+                };
+                imageSearchInfo = meta;
+
                 if (currentConversation) {
                   conversationImages[currentConversation] = obj.images;
+                  conversationImageMeta[currentConversation] = { ...meta };
                 }
-                
+
                 searchingImages = false;
-                console.log(`📸 Ditemukan ${obj.count} gambar:`, obj.images);
-                
-                // Auto-scroll to show images after a brief delay
+                console.log(`📸 Ditemukan ${obj.count ?? obj.images.length} gambar:`, obj.images);
+
                 setTimeout(() => {
                   if (chatContainer) {
                     chatContainer.scrollTo({
@@ -552,19 +627,92 @@
               searchingImages = false;
             }
           } else if (event === "images_empty") {
+            try {
+              const obj = JSON.parse(data || '{}');
+              const meta = {
+                status: "empty",
+                message: obj.message || `Tidak ada gambar ditemukan untuk ${obj.query || obj.primary_query || "kampus"}`,
+                query: obj.query || obj.primary_query || "",
+                primaryQuery: obj.primary_query || obj.query || "",
+                detectedUniversity: obj.detected_university || "",
+                fallback: Boolean(obj.fallback),
+                error: ""
+              };
+              imageSearchInfo = meta;
+              if (currentConversation) {
+                conversationImages[currentConversation] = [];
+                conversationImageMeta[currentConversation] = { ...meta };
+              }
+            } catch (e) {
+              console.error("Error parsing images_empty payload:", e);
+              imageSearchInfo = {
+                status: "empty",
+                message: "Tidak ada gambar ditemukan",
+                query: "",
+                primaryQuery: "",
+                detectedUniversity: "",
+                fallback: false,
+                error: ""
+              };
+            }
             currentImages = [];
             searchingImages = false;
             console.log("📸 Tidak ada gambar ditemukan");
           } else if (event === "images_error") {
             try {
-              const obj = JSON.parse(data);
+              const obj = JSON.parse(data || '{}');
               console.error("📸 Error mencari gambar:", obj.error);
+              const meta = {
+                status: "error",
+                message: obj.error || "Gagal mencari gambar",
+                query: obj.query || obj.primary_query || "",
+                primaryQuery: obj.primary_query || obj.query || "",
+                detectedUniversity: obj.detected_university || "",
+                fallback: Boolean(obj.fallback),
+                error: obj.error || "Gagal mencari gambar"
+              };
+              imageSearchInfo = meta;
+              if (currentConversation) {
+                conversationImages[currentConversation] = [];
+                conversationImageMeta[currentConversation] = { ...meta };
+              }
             } catch (e) {
               console.error("📸 Error mencari gambar (unknown)");
+              imageSearchInfo = {
+                status: "error",
+                message: "Gagal mencari gambar",
+                query: "",
+                primaryQuery: "",
+                detectedUniversity: "",
+                fallback: false,
+                error: "Gagal mencari gambar"
+              };
             }
             searchingImages = false;
             currentImages = [];
           } else if (event === "images_disabled") {
+            try {
+              const obj = JSON.parse(data || '{}');
+              imageSearchInfo = {
+                status: "disabled",
+                message: obj.message || "Fitur gambar belum dikonfigurasi",
+                query: obj.query || "",
+                primaryQuery: obj.query || "",
+                detectedUniversity: "",
+                fallback: false,
+                error: obj.message || ""
+              };
+            } catch (e) {
+              imageSearchInfo = {
+                status: "disabled",
+                message: "Fitur gambar belum dikonfigurasi",
+                query: "",
+                primaryQuery: "",
+                detectedUniversity: "",
+                fallback: false,
+                error: ""
+              };
+            }
             console.log("📸 Fitur gambar belum dikonfigurasi");
             searchingImages = false;
             currentImages = [];
@@ -1274,12 +1422,37 @@ async function deleteConversation(conversationId) {
         {/each}    
         
         <!-- Image Search Results -->
-        {#if searchingImages}
-          <div class="image-searching">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 12a9 9 0 11-6.219-8.56"/>
-            </svg>
-            Mencari gambar yang relevan...
+        {#if imageSearchInfo && imageSearchInfo.status !== 'found'}
+          <div class={`image-search-status status-${imageSearchInfo.status}`}>
+            {#if imageSearchInfo.status === 'searching'}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
+                <path d="M21 12a9 9 0 11-6.219-8.56"/>
+              </svg>
+            {:else if imageSearchInfo.status === 'error'}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+            {:else}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 11l3 3L22 4"/>
+                <path d="M21 12a9 9 0 11-6.219-8.56"/>
+              </svg>
+            {/if}
+            <div class="image-search-status-text">
+              <div class="image-search-message">{imageSearchInfo.message}</div>
+              {#if imageSearchInfo.query || imageSearchInfo.fallback}
+                <div class="image-search-meta">
+                  {#if imageSearchInfo.query}
+                    <span>Kueri: "{imageSearchInfo.query}"</span>
+                  {/if}
+                  {#if imageSearchInfo.fallback}
+                    <span>Menggunakan pencarian umum</span>
+                  {/if}
+                </div>
+              {/if}
+            </div>
           </div>
         {/if}
         
@@ -1291,7 +1464,11 @@ async function deleteConversation(conversationId) {
                 <circle cx="8.5" cy="8.5" r="1.5"/>
                 <polyline points="21,15 16,10 5,21"/>
               </svg>
-              Gambar Terkait ({currentImages.length})
+              {#if imageSearchInfo && imageSearchInfo.query}
+                Gambar {imageSearchInfo.query} ({currentImages.length})
+              {:else}
+                Gambar Terkait ({currentImages.length})
+              {/if}
             </h4>
             <div class="image-grid">
               {#each currentImages as image, idx}
@@ -1399,7 +1576,7 @@ async function deleteConversation(conversationId) {
       <button 
         class="image-toggle-btn" 
         class:active={requestImages}
-        on:click={() => requestImages = !requestImages}
+        on:click={toggleRequestImages}
         aria-label="Toggle pencarian gambar"
         title={requestImages ? "Matikan pencarian gambar" : "Nyalakan pencarian gambar"}
       >
