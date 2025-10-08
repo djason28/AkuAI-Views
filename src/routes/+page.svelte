@@ -22,7 +22,8 @@
     document.documentElement.setAttribute('data-theme', savedTheme);
   }
 
-  const API_URL = "http://127.0.0.1:5000";
+  // Use env-driven base; default to same-origin for VPS deployment
+  const API_URL = import.meta.env.VITE_API_BASE || "";
 
   let token = "";
   let conversations = [];

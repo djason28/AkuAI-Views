@@ -82,13 +82,13 @@ npm install
 #### 3. Verify Installation
 ```bash
 npm list --depth=0
-```
+**Backend must be running and reachable from the frontend.** By default, the app uses same-origin relative paths. Set `VITE_API_BASE` in `.env` if your API is on a different origin.
 
 ### 🚀 Running the Application
 
 #### Development Mode
 ```bash
-npm run dev
+**Backend API configuration:**
 
 # Server will start at: http://localhost:5173
 # The terminal will show:
@@ -99,7 +99,9 @@ npm run dev
 #### Open in Browser
 ```bash
 # Automatically open in default browser
-npm run dev -- --open
+// Prefer same-origin in production; during local dev you can override via VITE_API_BASE
+const API_URL = import.meta.env.VITE_API_BASE || ""
+const WS_URL = "ws://localhost:5000/ws/chat"
 
 # Or manually navigate to:
 # http://localhost:5173
